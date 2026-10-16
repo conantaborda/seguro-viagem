@@ -26,14 +26,35 @@ def txt(valor) -> str:
     return "" if valor is None or pd.isna(valor) else str(valor).strip()
 
 
-arquivos = st.file_uploader("PDFs dos vouchers", type=["pdf"], accept_multiple_files=True)
+def limpar():
+    """Esvazia o envio (trocando a chave do uploader), a conferência e os dados guardados em memória."""
+    st.session_state["vouchers_chave"] = st.session_state.get("vouchers_chave", 0) + 1
+    for chave in [k for k in st.session_state if str(k).startswith("editor_") or k == "vouchers_iniciado"]:
+        del st.session_state[chave]
+    analisar.clear()
+    separar.clear()
+
+
+arquivos = st.file_uploader("PDFs dos vouchers", type=["pdf"], accept_multiple_files=True,
+                            key=f"vouchers_upload_{st.session_state.get('vouchers_chave', 0)}")
 if not arquivos:
     st.info("Envie um ou mais PDFs para começar. Um PDF com vários vouchers é separado automaticamente.")
     st.stop()
 
 dados = tuple((a.name, a.getvalue()) for a in arquivos)
-vouchers = analisar(dados)
 assin = hashlib.md5(b"".join(n.encode() + c for n, c in dados)).hexdigest()[:10]
+
+# A leitura/separação só começa quando o operador clica. Ao trocar os PDFs enviados, é preciso clicar de novo.
+st.write(f"**{len(arquivos)} arquivo(s)** enviado(s).")
+col_iniciar, col_limpar, _ = st.columns([1.3, 1, 4])
+if col_iniciar.button("▶️ Iniciar separação", type="primary"):
+    st.session_state["vouchers_iniciado"] = assin
+col_limpar.button("🗑️ Limpar", on_click=limpar, help="Remove os PDFs enviados e os resultados desta tela.")
+if st.session_state.get("vouchers_iniciado") != assin:
+    st.info("Clique em “Iniciar separação” para ler e separar os vouchers.")
+    st.stop()
+
+vouchers = analisar(dados)
 
 # ------------------------------------------------------------------ 1. conferência
 st.subheader("1. Confira os dados lidos")

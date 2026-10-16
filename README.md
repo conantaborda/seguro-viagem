@@ -37,6 +37,9 @@ NOME_INICIOaFIM_PLANO.pdf
 FABIO GARCIA_22.11.26a30.11.26_10487-NACIONAL 30.000.pdf
 ```
 
+- **Início manual:** depois de enviar os PDFs, a separação só começa ao clicar em **Iniciar separação**
+  (trocar os arquivos enviados exige clicar de novo). O botão **Limpar** remove os PDFs enviados e os
+  resultados da tela e apaga os dados lidos da memória do servidor.
 - **Separação:** cada voucher começa na página "Voucher de assistência de viagem" (traz *Voucher: nº* e *Nome:*);
   as páginas seguintes (bilhete, encarte de benefícios) ficam com ele. Um PDF com vários vouchers é separado
   automaticamente; um PDF de um voucher só é devolvido intacto, apenas com o nome novo.
