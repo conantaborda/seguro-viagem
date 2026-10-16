@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Dados pessoais: nunca versionar planilhas reais
+*.xlsx
+*.xls
+*.csv
+
+# Sistema
+.DS_Store
