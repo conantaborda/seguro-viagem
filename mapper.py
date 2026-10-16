@@ -566,7 +566,8 @@ def converter(
             _txt(bruto("grupo", i)) if mapa.get("grupo") is not None else grupo_fixo,
         ]))))
         rel.append({
-            "Linha": linhas[i], "Nome": nome, "CPF": cpf, "Data de Nascimento": nasc,
+            "Linha": linhas[i], "Nome": nome, "Nome informado": _txt(v_nome), "CPF informado": _txt(v_cpf), "CPF": cpf,
+            "Data de Nascimento": nasc,
             "Nome OK": ok_n, "CPF OK": ok_c, "Data OK": ok_d,
             "Erro Nome": e_n, "Erro CPF": e_c, "Erro Data": e_d, "Avisos": "; ".join(avisos),
             "Origem do endereço": origem_end,
@@ -578,7 +579,10 @@ def converter(
     if marcar_duplicados and len(rel_df):
         serie = pd.Series(cpfs, dtype=object)
         dup = serie.notna() & serie.duplicated(keep=False)
-        rel_df.loc[dup, "Erro CPF"] = "CPF duplicado na planilha"
+        for idx in rel_df.index[dup]:
+            iguais = dup & (serie == serie[idx])
+            linhas_iguais = ", ".join(str(l) for l in rel_df.loc[iguais, "Linha"])
+            rel_df.loc[idx, "Erro CPF"] = f"CPF duplicado na planilha (linhas {linhas_iguais})"
         rel_df.loc[dup, "CPF OK"] = False
 
     if len(rel_df):
@@ -587,6 +591,107 @@ def converter(
     else:
         rel_df["Status"] = []
     return saida_df, rel_df
+
+
+# --------------------------------------------------------------------------- pendências para o cliente
+ORIENTACOES = [
+    ("Nome vazio", "Informar o nome completo do passageiro."),
+    ("Nome contém números", "Remover os números do nome."),
+    ("Nome contém caracteres inválidos", "Usar apenas letras no nome."),
+    ("Informe nome e sobrenome", "Informar nome e sobrenome completos."),
+    ("Nome contém abreviação", "Escrever o nome por extenso, sem iniciais isoladas."),
+    ("Nome com caracteres repetidos", "Conferir a digitação do nome."),
+    ("CPF vazio", "Informar o CPF do passageiro."),
+    ("CPF com todos", "Informar o CPF real do passageiro."),
+    ("CPF com", "Conferir o CPF: ele deve ter 11 dígitos."),
+    ("Dígito verificador", "CPF digitado incorretamente: conferir os números com o documento do passageiro."),
+    ("CPF duplicado", "O mesmo CPF aparece em mais de uma linha: confirmar qual passageiro está correto."),
+    ("Data vazia", "Informar a data de nascimento (DD/MM/AAAA)."),
+    ("Data em formato inválido", "Usar uma data que exista, no formato DD/MM/AAAA."),
+    ("Data no futuro", "A data de nascimento informada é futura: conferir."),
+    ("Idade acima", "Conferir o ano de nascimento."),
+]
+
+
+def _orientacao(erro: str) -> str:
+    for prefixo, texto in ORIENTACOES:
+        if erro.startswith(prefixo):
+            return texto
+    return "Conferir e corrigir o dado."
+
+
+def _juntar(itens: list[str]) -> str:
+    return itens[0] if len(itens) == 1 else ", ".join(itens[:-1]) + " e " + itens[-1]
+
+
+def somente_validas(saida: pd.DataFrame, rel: pd.DataFrame) -> pd.DataFrame:
+    """Linhas do modelo que podem ser emitidas (nome, CPF e data corretos)."""
+    return saida[(rel["Status"] == "Válido").to_numpy()]
+
+
+def gerar_pendencias(rel: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha por passageiro com dado incorreto, em linguagem para enviar ao cliente."""
+    linhas = []
+    for _, r in rel[rel["Status"] == "Inválido"].iterrows():
+        campos, detalhes, orient = [], [], []
+        for campo, erro in (("Nome", r["Erro Nome"]), ("CPF", r["Erro CPF"]), ("Data de nascimento", r["Erro Data"])):
+            if erro:
+                campos.append(campo)
+                detalhes.append(f"{campo}: {erro}")
+                orient.append(_orientacao(erro))
+        linhas.append({
+            "Linha na planilha": r["Linha"],
+            "Nome informado": r["Nome informado"],
+            "CPF informado": r["CPF informado"],
+            "Data de nascimento informada": r["Data de Nascimento"],
+            "Dado(s) incorreto(s)": _juntar(campos),
+            "Problema": "; ".join(detalhes),
+            "Como corrigir": " ".join(orient),
+        })
+    return pd.DataFrame(linhas, columns=[
+        "Linha na planilha", "Nome informado", "CPF informado", "Data de nascimento informada",
+        "Dado(s) incorreto(s)", "Problema", "Como corrigir"])
+
+
+def mensagem_cliente(pend: pd.DataFrame, total: int) -> str:
+    """Texto pronto para colar em e-mail/WhatsApp. Vazio se não houver pendências."""
+    n = len(pend)
+    if n == 0:
+        return ""
+    ok = total - n
+    texto = ["Prezado(a),", "",
+             f"Ao validar a planilha enviada, identificamos {n} de {total} passageiro(s) com dados incorretos. "
+             "Essas linhas NÃO foram incluídas na emissão:", ""]
+    for _, r in pend.iterrows():
+        texto.append(f"• Linha {r['Linha na planilha']} - {r['Nome informado'] or '(nome em branco)'} | "
+                     f"CPF: {r['CPF informado'] or '(em branco)'} | "
+                     f"Nascimento: {r['Data de nascimento informada'] or '(em branco)'}")
+        texto += [f"    - {d}" for d in r["Problema"].split("; ")]
+    texto += ["", "Pedimos a gentileza de corrigir esses dados e nos reenviar"
+              + (f"; os outros {ok} passageiro(s) seguem normalmente." if ok else "."),
+              "", "Atenciosamente."]
+    return "\n".join(texto)
+
+
+def pendencias_para_xlsx(pend: pd.DataFrame) -> bytes:
+    """Planilha de pendências formatada para enviar ao cliente."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        pend.to_excel(xw, sheet_name="Pendências", index=False)
+        ws = xw.sheets["Pendências"]
+        for col, largura in zip("ABCDEFG", (11, 34, 20, 18, 24, 55, 55)):
+            ws.column_dimensions[col].width = largura
+        for c in ws[1]:
+            c.font = Font(bold=True, color="FFFFFF")
+            c.fill = PatternFill("solid", fgColor="1F4E78")
+            c.alignment = Alignment(wrap_text=True, vertical="center")
+        for linha in ws.iter_rows(min_row=2):
+            for c in linha:
+                c.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.freeze_panes = "A2"
+    return buf.getvalue()
 
 
 def para_csv(saida: pd.DataFrame, encoding: str = "utf-8") -> bytes:

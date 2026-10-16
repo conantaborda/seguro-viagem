@@ -101,7 +101,7 @@ def test_cabecalhos_inuteis_e_cpf_duplicado():
     df, linhas, det, mapa, li = processar(xlsx_bytes(dados), "d.xlsx")
     assert (mapa["nome"], mapa["cpf"], mapa["nascimento"]) == (0, 1, 2)
     _, rel = converter(df, linhas, mapa)
-    assert list(rel["Erro CPF"]) == ["CPF duplicado na planilha"] * 2
+    assert list(rel["Erro CPF"]) == ["CPF duplicado na planilha (linhas 2, 3)"] * 2
 
 
 def test_csv_saida_no_padrao_do_modelo():
@@ -256,3 +256,65 @@ def test_padrao_com_endereco_acentuado_sai_sem_acento():
     s, _ = converter(df, linhas, mapa, cep_padrao="87020-000", endereco_padrao=end)
     assert set(s["Rua"]) == {"Avenida Sao Joao"} and set(s["Cidade"]) == {"Maringa"}
     assert all(v.isascii() for col in s.columns for v in s[col])
+
+
+# ----------------------------------------------------------------------------- CSV só com válidos + pendências do cliente
+def _rel_misto():
+    """0 válido; 1 nome sem sobrenome + CPF inválido; 2 data inexistente; 3 e 4 com CPF repetido."""
+    df, linhas, mapa = df_basico(n=5)
+    df.loc[1, "Nome"], df.loc[1, "CPF"] = "José", "529.982.247-24"
+    df.loc[2, "Nascimento"] = "31/02/1990"
+    df.loc[4, "CPF"] = df.loc[3, "CPF"]
+    saida, rel = converter(df, linhas, mapa)
+    return saida, rel
+
+
+def test_csv_leva_somente_linhas_validas():
+    from mapper import somente_validas
+    saida, rel = _rel_misto()
+    assert list(rel["Status"]) == ["Válido"] + ["Inválido"] * 4
+    ok = somente_validas(saida, rel)
+    assert len(ok) == 1 and ok.iloc[0]["Pax (nome e sobrenome)"] == "Pessoa Numeroa Silva"
+    csv_linhas = para_csv(ok).decode().strip().split("\r\n")
+    assert len(csv_linhas) == 2  # cabeçalho + 1 linha válida
+
+
+def test_pendencias_listam_dado_incorreto_e_orientacao():
+    from mapper import gerar_pendencias
+    _, rel = _rel_misto()
+    pend = gerar_pendencias(rel)
+    assert list(pend["Linha na planilha"]) == [3, 4, 5, 6]
+    a, b, c, d = (pend.iloc[i] for i in range(4))
+    assert a["Nome informado"] == "José"  # como o cliente informou, com acento
+    assert a["CPF informado"] == "529.982.247-24"
+    assert a["Dado(s) incorreto(s)"] == "Nome e CPF"
+    assert "Nome: Informe nome e sobrenome" in a["Problema"]
+    assert "CPF: Dígito verificador inválido" in a["Problema"]
+    assert "Informar nome e sobrenome completos." in a["Como corrigir"]
+    assert b["Dado(s) incorreto(s)"] == "Data de nascimento"
+    assert b["Problema"] == "Data de nascimento: Data em formato inválido"
+    assert b["Data de nascimento informada"] == "31/02/1990"
+    assert c["Problema"] == d["Problema"] == "CPF: CPF duplicado na planilha (linhas 5, 6)"
+    assert 2 not in list(pend["Linha na planilha"])  # a linha 2 é a única válida e não entra
+
+
+def test_mensagem_e_planilha_de_pendencias():
+    from mapper import gerar_pendencias, mensagem_cliente, pendencias_para_xlsx
+    _, rel = _rel_misto()
+    pend = gerar_pendencias(rel)
+    msg = mensagem_cliente(pend, total=len(rel))
+    assert "4 de 5 passageiro(s)" in msg and "NÃO foram incluídas" in msg
+    assert "Linha 3 - José | CPF: 529.982.247-24" in msg
+    assert "    - CPF: Dígito verificador inválido" in msg
+    assert "os outros 1 passageiro(s) seguem normalmente" in msg
+    lido = pd.read_excel(io.BytesIO(pendencias_para_xlsx(pend)), dtype=object)
+    assert list(lido.columns) == list(pend.columns) and len(lido) == 4
+    assert lido.loc[0, "CPF informado"] == "529.982.247-24"
+
+
+def test_sem_pendencias_quando_tudo_valido():
+    from mapper import gerar_pendencias, mensagem_cliente
+    df, linhas, mapa = df_basico(n=3)
+    _, rel = converter(df, linhas, mapa)
+    pend = gerar_pendencias(rel)
+    assert pend.empty and mensagem_cliente(pend, 3) == ""

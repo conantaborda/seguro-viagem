@@ -17,7 +17,9 @@ modelo `emissao_planilha_modelo`.
    e data de nascimento (existente, não futura, idade máxima). E-mail, celular, CEP e UF geram apenas avisos.
 5. **Padrões (opcional):** informe um CEP, número, complemento, e-mail e celular padrão para preencher
    as linhas em que a planilha não tem o dado, ou todas as linhas, à escolha do operador (veja abaixo).
-6. **Saída:** CSV no modelo + relatório de validação (`.xlsx`) com o número da linha de cada problema.
+6. **Saída:** o CSV no modelo leva **somente as linhas válidas**. Quem tem nome, CPF ou data incorretos
+   vai para as **pendências do cliente** (planilha `.xlsx` + mensagem pronta), com o dado errado, o motivo
+   e como corrigir. Há também um relatório de validação interno com o número da linha de cada problema.
 
 ## Padrões e consulta de CEP
 

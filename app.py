@@ -11,7 +11,8 @@ import streamlit as st
 from mapper import (
     CAMPOS, FORMATOS_CPF, ROTULO, converter, detectar_linha_cabecalho, detectar_mapeamento,
     email_valido, ler_arquivo_bruto, letra_coluna, montar_df, normalizar_celular, normalizar_cep,
-    para_csv, pontuar, so_digitos,
+    gerar_pendencias, mensagem_cliente, para_csv, pendencias_para_xlsx, pontuar, so_digitos,
+    somente_validas,
 )
 from cep import consultar_cep
 
@@ -200,11 +201,11 @@ m[1].metric("Válidos", validos)
 m[2].metric("Inválidos", invalidos)
 m[3].metric("Com avisos", int((rel["Avisos"] != "").sum()))
 if invalidos:
-    st.warning(f"{invalidos} linha(s) com erro em nome, CPF ou data. Corrija na planilha de origem "
-               "ou exporte somente as válidas.")
+    st.error(f"{invalidos} passageiro(s) com dados incorretos NÃO entram no CSV do modelo. "
+             "Veja “5. Pendências para o cliente” mais abaixo.")
 
-st.subheader("Prévia no formato do modelo")
-st.dataframe(saida.head(20))
+st.subheader("Prévia do CSV (somente linhas válidas)")
+st.dataframe(somente_validas(saida, rel).head(20))
 
 st.subheader("Validação")
 filtro = st.radio("Mostrar", ["Somente com problemas", "Todos"], horizontal=True)
@@ -216,18 +217,30 @@ st.dataframe(vis[cols_vis].style.apply(
 
 # ------------------------------------------------------------------ downloads
 st.subheader("4. Downloads")
-escopo = st.radio("Linhas no CSV", ["Todas as linhas", "Somente linhas válidas"], horizontal=True)
-saida_exp = saida if escopo == "Todas as linhas" else saida[rel["Status"] == "Válido"]
+validas = somente_validas(saida, rel)
+pend = gerar_pendencias(rel)
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 d1, d2 = st.columns(2)
-d1.download_button("⬇️ CSV no modelo", para_csv(saida_exp, codificacao),
-                   file_name="emissao_planilha_preenchida.csv", mime="text/csv", type="primary")
+d1.download_button(
+    f"⬇️ CSV no modelo ({len(validas)} linhas válidas)", para_csv(validas, codificacao),
+    file_name="emissao_planilha_preenchida.csv", mime="text/csv", type="primary", disabled=validas.empty)
+if validas.empty:
+    d1.caption("Nenhuma linha válida para emitir.")
 
 buf = io.BytesIO()
-rel_x = rel.drop(columns=["Nome OK", "CPF OK", "Data OK"])
+rel_x = rel.drop(columns=["Nome OK", "CPF OK", "Data OK", "Nome informado", "CPF informado"])
 with pd.ExcelWriter(buf, engine="openpyxl") as xw:
     rel_x.to_excel(xw, sheet_name="Relatório", index=False)
     rel_x[rel_x["Status"] == "Inválido"].to_excel(xw, sheet_name="Somente inválidos", index=False)
-d2.download_button("⬇️ Relatório de validação (.xlsx)", buf.getvalue(),
-                   file_name="relatorio_validacao.xlsx",
-                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+d2.download_button("⬇️ Relatório de validação interno (.xlsx)", buf.getvalue(),
+                   file_name="relatorio_validacao.xlsx", mime=XLSX)
+
+if not pend.empty:
+    st.subheader("5. Pendências para o cliente")
+    st.caption("Passageiros com nome, CPF ou data de nascimento incorretos. Eles NÃO entram no CSV do modelo.")
+    st.dataframe(pend, hide_index=True)
+    st.download_button("⬇️ Pendências para o cliente (.xlsx)", pendencias_para_xlsx(pend),
+                       file_name="pendencias_cliente.xlsx", mime=XLSX)
+    st.markdown("**Mensagem pronta para enviar ao cliente** (use o botão de copiar no canto do quadro):")
+    st.code(mensagem_cliente(pend, total), language=None)
