@@ -382,6 +382,10 @@ def normalizar_cep(v) -> tuple[str, bool]:
     return (f"{d[:5]}-{d[5:]}" if len(d) == 8 else t), len(d) == 8
 
 
+def email_valido(v) -> bool:
+    return bool(_RE_EMAIL.fullmatch(_txt(v)))
+
+
 def converter(
     df: pd.DataFrame,
     linhas: list[int],
@@ -395,12 +399,51 @@ def converter(
     marcar_duplicados: bool = True,
     file_fixo: str = "",
     grupo_fixo: str = "",
+    # --- padrões. Modos: "vazios" (só onde a planilha não tem o dado) ou "todas" (todas as linhas)
+    cep_padrao: str = "",
+    cep_modo: str = "vazios",
+    endereco_padrao: dict | None = None,  # rua, bairro, cidade, uf (e complemento) do CEP padrão
+    numero_padrao: str = "",
+    complemento_padrao: str = "",
+    email_padrao: str = "",
+    email_modo: str = "vazios",
+    celular_padrao: str = "",
+    celular_modo: str = "vazios",
+    # --- consulta de CEP: função(cep 8 dígitos) -> dict | None; pode levantar exceção se a API cair
+    buscar_cep=None,
+    completar_pelo_cep: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Devolve (saida no formato do modelo, relatório de validação). `mapa`: campo -> posição da coluna ou None."""
 
     def bruto(campo, i):
         c = mapa.get(campo)
         return None if c is None else df.iat[i, c]
+
+    # padrões já normalizados (padrão inválido é ignorado; a interface avisa o operador)
+    cep_padrao_fmt, cep_padrao_ok = normalizar_cep(cep_padrao) if _tem_valor(cep_padrao) else ("", False)
+    end_padrao = endereco_padrao or {}
+    email_padrao = _txt(email_padrao).lower()
+    if email_padrao and not _RE_EMAIL.fullmatch(email_padrao):
+        email_padrao = ""
+    cel_padrao, cel_padrao_ok = normalizar_celular(celular_padrao) if _tem_valor(celular_padrao) else ("", False)
+
+    memo: dict[str, tuple] = {}
+    estado = {"falhas": 0}
+
+    def consultar(cep_fmt: str):
+        """(info, erro): info=None e erro=None significa CEP inexistente."""
+        d = so_digitos(cep_fmt)
+        if d in memo:
+            return memo[d]
+        if estado["falhas"] >= 3:  # API fora do ar: para de tentar
+            return None, "Consulta de CEP indisponível"
+        try:
+            r = (buscar_cep(d), None)
+        except Exception:
+            estado["falhas"] += 1
+            r = (None, "Falha ao consultar o CEP na API")
+        memo[d] = r
+        return r
 
     saida, rel, cpfs = [], [], []
     for i in range(len(df)):
@@ -427,40 +470,76 @@ def converter(
             cpf, cpf_norm = _txt(v_cpf), None
         cpfs.append(cpf_norm)
 
-        # --- demais campos (problemas viram avisos, não reprovam a linha)
+        # --- contato: padrão só onde vazio, ou em todas as linhas
         email = _txt(bruto("email", i)).lower()
-        if email and not _RE_EMAIL.fullmatch(email):
+        if email_padrao and (email_modo == "todas" or not email):
+            email = email_padrao
+        elif email and not _RE_EMAIL.fullmatch(email):
             avisos.append("E-mail em formato inválido")
 
-        celular = ""
-        if _tem_valor(bruto("celular", i)):
-            celular, ok_cel = normalizar_celular(bruto("celular", i))
+        celular, v_cel = "", bruto("celular", i)
+        if cel_padrao_ok and (celular_modo == "todas" or not _tem_valor(v_cel)):
+            celular = cel_padrao
+        elif _tem_valor(v_cel):
+            celular, ok_cel = normalizar_celular(v_cel)
             if not ok_cel:
                 avisos.append("Celular fora do padrão DDD + número")
 
-        cep = ""
-        if _tem_valor(bruto("cep", i)):
-            cep, ok_cep = normalizar_cep(bruto("cep", i))
-            if not ok_cep:
-                avisos.append("CEP fora do padrão (8 dígitos)")
-
-        uf = _txt(bruto("uf", i)).upper()
-        if uf and uf not in UFS:
+        # --- CEP e endereço
+        v_cep = bruto("cep", i)
+        tem_cep = _tem_valor(v_cep)
+        usar_padrao = cep_padrao_ok and (cep_modo == "todas" or (cep_modo == "vazios" and not tem_cep))
+        origem_end = "planilha"
+        if usar_padrao:
+            cep = cep_padrao_fmt
+            end = {k: _txt(end_padrao.get(k, "")) for k in ("rua", "bairro", "cidade", "uf")}
+            end["uf"] = end["uf"].upper()
+            numero = _txt(numero_padrao)
+            complemento = _txt(complemento_padrao) or _txt(end_padrao.get("complemento", ""))
+            origem_end = "CEP padrão"
+        else:
+            end = {k: _txt(bruto(k, i)) for k in ("rua", "bairro", "cidade", "uf")}
+            end["uf"] = end["uf"].upper()
+            numero, complemento = _txt(bruto("numero", i)), _txt(bruto("complemento", i))
+            cep = ""
+            if tem_cep:
+                cep, ok_cep = normalizar_cep(v_cep)
+                if not ok_cep:
+                    avisos.append("CEP fora do padrão (8 dígitos)")
+                elif buscar_cep is not None:
+                    info, erro = consultar(cep)
+                    if erro:
+                        avisos.append(erro)
+                    elif info is None:
+                        avisos.append("CEP não encontrado nas APIs de consulta")
+                    else:
+                        if completar_pelo_cep:
+                            completou = False
+                            for k in end:
+                                if not end[k] and info.get(k):
+                                    end[k] = info[k].upper() if k == "uf" else info[k]
+                                    completou = True
+                            if completou:
+                                origem_end = "completado pelo CEP"
+                        if end["uf"] and info.get("uf") and end["uf"] != info["uf"].upper():
+                            avisos.append("UF diverge do CEP")
+                        if end["cidade"] and info.get("cidade") and norm(end["cidade"]) != norm(info["cidade"]):
+                            avisos.append("Cidade diverge do CEP")
+        if end["uf"] and end["uf"] not in UFS:
             avisos.append("UF não reconhecida")
-
-        file_ = _txt(bruto("file", i)) if mapa.get("file") is not None else file_fixo
-        grupo = _txt(bruto("grupo", i)) if mapa.get("grupo") is not None else grupo_fixo
 
         saida.append(dict(zip(COLUNAS_MODELO, [
             nome, nasc, cpf, email, celular, cep,
-            _txt(bruto("rua", i)), _txt(bruto("numero", i)), _txt(bruto("bairro", i)),
-            _txt(bruto("complemento", i)), _txt(bruto("cidade", i)), uf,
-            _txt(bruto("sexo", i)), file_, grupo,
+            end["rua"], numero, end["bairro"], complemento, end["cidade"], end["uf"],
+            _txt(bruto("sexo", i)),
+            _txt(bruto("file", i)) if mapa.get("file") is not None else file_fixo,
+            _txt(bruto("grupo", i)) if mapa.get("grupo") is not None else grupo_fixo,
         ])))
         rel.append({
             "Linha": linhas[i], "Nome": nome, "CPF": cpf, "Data de Nascimento": nasc,
             "Nome OK": ok_n, "CPF OK": ok_c, "Data OK": ok_d,
             "Erro Nome": e_n, "Erro CPF": e_c, "Erro Data": e_d, "Avisos": "; ".join(avisos),
+            "Origem do endereço": origem_end,
         })
 
     saida_df = pd.DataFrame(saida, columns=COLUNAS_MODELO, dtype=object)

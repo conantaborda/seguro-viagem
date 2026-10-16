@@ -14,7 +14,20 @@ modelo `emissao_planilha_modelo`.
    data `DD/MM/AAAA`, celular `00-000000000`, CEP `00000-000`, CPF no formato escolhido.
 4. **Validação:** nome (nome e sobrenome, sem números), CPF (dígitos verificadores, repetidos, duplicados)
    e data de nascimento (existente, não futura, idade máxima). E-mail, celular, CEP e UF geram apenas avisos.
-5. **Saída:** CSV no modelo + relatório de validação (`.xlsx`) com o número da linha de cada problema.
+5. **Padrões (opcional):** informe um CEP, número, complemento, e-mail e celular padrão para preencher
+   as linhas em que a planilha não tem o dado, ou todas as linhas, à escolha do operador (veja abaixo).
+6. **Saída:** CSV no modelo + relatório de validação (`.xlsx`) com o número da linha de cada problema.
+
+## Padrões e consulta de CEP
+
+- **CEP padrão:** o app consulta o endereço (rua, bairro, cidade, UF) na API, mostra para conferência e
+  permite editar manualmente. Aplica em *somente onde estiver vazio* ou em *todas as linhas*.
+- **Número, complemento, e-mail e celular padrão:** mesma lógica de aplicação.
+- **CEPs da planilha:** são validados (formato e existência) e, se rua/bairro/cidade/UF estiverem vazios,
+  completados pelo CEP. Divergência de cidade/UF e CEP inexistente geram avisos (não reprovam a linha).
+- **APIs:** ViaCEP (principal) e BrasilAPI (reserva). Só o CEP é enviado, nunca nome ou CPF.
+  Cada CEP distinto é consultado uma vez (com cache) e, se a API cair, as consultas são interrompidas
+  após 3 falhas e a geração continua sem elas.
 
 ## Executar
 
@@ -30,7 +43,8 @@ streamlit run app.py
 | `app.py` | Interface Streamlit |
 | `mapper.py` | Detecção de colunas e conversão para o modelo |
 | `validators.py` | Regras de validação de nome, CPF e data |
-| `test_validators.py`, `test_mapper.py` | Testes (dados fictícios) |
+| `cep.py` | Consulta de CEP (ViaCEP + BrasilAPI) |
+| `test_validators.py`, `test_mapper.py`, `test_cep.py` | Testes (dados fictícios, APIs simuladas) |
 
 ## Testes
 

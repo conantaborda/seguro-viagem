@@ -10,8 +10,10 @@ import streamlit as st
 
 from mapper import (
     CAMPOS, FORMATOS_CPF, ROTULO, converter, detectar_linha_cabecalho, detectar_mapeamento,
-    ler_arquivo_bruto, letra_coluna, montar_df, para_csv, pontuar,
+    email_valido, ler_arquivo_bruto, letra_coluna, montar_df, normalizar_celular, normalizar_cep,
+    para_csv, pontuar, so_digitos,
 )
+from cep import consultar_cep
 
 st.set_page_config(page_title="Planilha → Modelo de Emissão", page_icon="🧾", layout="wide")
 st.title("🧾 Planilha → Modelo de emissão")
@@ -29,6 +31,12 @@ def carregar(conteudo: bytes, nome: str):
         df, _ = montar_df(raw, detectar_linha_cabecalho(raw))
         pontos[aba] = pontuar(detectar_mapeamento(df)) if len(df) else 0
     return abas, pontos
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def buscar_cep_cache(cep: str):
+    """Consulta a API uma vez por CEP (exceção da API não é guardada em cache)."""
+    return consultar_cep(cep)
 
 
 arquivo = st.file_uploader("Planilha de origem", type=["xlsx", "xls", "csv"])
@@ -85,6 +93,63 @@ if repetidas:
     st.warning("A mesma coluna está sendo usada em mais de um campo: "
                + ", ".join(nome_opcao(j) for j in repetidas))
 
+# ------------------------------------------------------------------ padrões
+st.subheader("2. Padrões para preencher as linhas")
+st.caption("Opcional. Preenche CEP/endereço, e-mail e celular quando a planilha não tiver o dado "
+           "— ou em todas as linhas, se você escolher.")
+MODOS = {"vazios": "Somente onde estiver vazio", "todas": "Em todas as linhas (ignora a planilha)"}
+padroes_ok = True
+
+with st.container(border=True):
+    st.markdown("**CEP e endereço**")
+    a1, a2, a3, a4 = st.columns([1, 1, 1, 1.6])
+    cep_padrao = a1.text_input("CEP padrão", placeholder="00000-000")
+    numero_padrao = a2.text_input("Número padrão")
+    complemento_padrao = a3.text_input("Complemento padrão")
+    cep_modo = a4.radio("Aplicar o CEP padrão", list(MODOS), format_func=MODOS.get, key="cep_modo")
+    endereco_padrao = {}
+    cep_fmt, cep_ok = normalizar_cep(cep_padrao) if cep_padrao.strip() else ("", False)
+    if cep_padrao.strip() and not cep_ok:
+        st.error("CEP padrão inválido: informe os 8 dígitos.")
+        padroes_ok = False
+    elif cep_ok:
+        info, falha_api = None, False
+        try:
+            info = buscar_cep_cache(so_digitos(cep_fmt))
+        except Exception:
+            falha_api = True
+        if falha_api:
+            st.warning("Não consegui consultar a API de CEP agora. Preencha o endereço manualmente abaixo.")
+        elif info is None:
+            st.warning("CEP não encontrado nas APIs. Confira o número ou preencha o endereço manualmente.")
+        else:
+            st.success(f"{info['rua'] or '(CEP geral, sem logradouro)'} · {info['bairro']} · "
+                       f"{info['cidade']}/{info['uf']}")
+        info = info or {}
+        k = f"{cep_fmt}_{bool(info)}"
+        e1, e2, e3, e4 = st.columns([2, 1.2, 1.2, 0.6])
+        endereco_padrao = {
+            "rua": e1.text_input("Rua", value=info.get("rua", ""), key=f"end_rua_{k}"),
+            "bairro": e2.text_input("Bairro", value=info.get("bairro", ""), key=f"end_bairro_{k}"),
+            "cidade": e3.text_input("Cidade", value=info.get("cidade", ""), key=f"end_cidade_{k}"),
+            "uf": e4.text_input("UF", value=info.get("uf", ""), max_chars=2, key=f"end_uf_{k}"),
+            "complemento": info.get("complemento", ""),
+        }
+
+with st.container(border=True):
+    st.markdown("**Contato**")
+    b1, b2, b3, b4 = st.columns(4)
+    email_padrao = b1.text_input("E-mail padrão")
+    email_modo = b2.radio("Aplicar o e-mail padrão", list(MODOS), format_func=MODOS.get, key="email_modo")
+    celular_padrao = b3.text_input("Celular padrão", placeholder="(00) 90000-0000")
+    celular_modo = b4.radio("Aplicar o celular padrão", list(MODOS), format_func=MODOS.get, key="cel_modo")
+    if email_padrao.strip() and not email_valido(email_padrao):
+        st.error("E-mail padrão inválido.")
+        padroes_ok = False
+    if celular_padrao.strip() and not normalizar_celular(celular_padrao)[1]:
+        st.error("Celular padrão inválido: use DDD + número (ex.: (18) 98120-1061).")
+        padroes_ok = False
+
 # ------------------------------------------------------------------ opções
 with st.expander("Opções de formato e validação", expanded=False):
     o1, o2 = st.columns(2)
@@ -104,13 +169,21 @@ with st.expander("Opções de formato e validação", expanded=False):
     dup = q2.checkbox("Reprovar CPF duplicado", value=True)
     file_fixo = q3.text_input("Valor fixo para “file” (se não houver coluna)")
     grupo_fixo = st.text_input("Valor fixo para “grupo” (se não houver coluna)")
+    consultar = st.checkbox("Consultar na API os CEPs da planilha (valida se existem)", value=True,
+                            help="Uma consulta por CEP distinto, com cache. Desmarque para não usar a API.")
+    completar = st.checkbox("Completar rua/bairro/cidade/UF pelo CEP quando estiverem vazios", value=True)
 
 # ------------------------------------------------------------------ geração
-if st.button("2. Gerar planilha no modelo", type="primary"):
+if st.button("3. Gerar planilha no modelo", type="primary", disabled=not padroes_ok):
     saida, rel = converter(
         df, linhas, mapa, formato_cpf=formato_cpf, nome_maiusculo=nome_maiusculo,
         completar_zeros=zeros, exigir_sobrenome=sobrenome, idade_max=int(idade_max),
-        marcar_duplicados=dup, file_fixo=file_fixo, grupo_fixo=grupo_fixo)
+        marcar_duplicados=dup, file_fixo=file_fixo, grupo_fixo=grupo_fixo,
+        cep_padrao=cep_padrao, cep_modo=cep_modo, endereco_padrao=endereco_padrao,
+        numero_padrao=numero_padrao, complemento_padrao=complemento_padrao,
+        email_padrao=email_padrao, email_modo=email_modo,
+        celular_padrao=celular_padrao, celular_modo=celular_modo,
+        buscar_cep=buscar_cep_cache if consultar else None, completar_pelo_cep=completar)
     st.session_state["resultado"] = (assin, saida, rel, codificacao)
 
 res = st.session_state.get("resultado")
@@ -136,13 +209,13 @@ st.dataframe(saida.head(20))
 st.subheader("Validação")
 filtro = st.radio("Mostrar", ["Somente com problemas", "Todos"], horizontal=True)
 vis = rel if filtro == "Todos" else rel[(rel["Status"] == "Inválido") | (rel["Avisos"] != "")]
-cols_vis = ["Linha", "Nome", "CPF", "Data de Nascimento", "Status", "Erro Nome", "Erro CPF", "Erro Data", "Avisos"]
+cols_vis = ["Linha", "Nome", "CPF", "Data de Nascimento", "Status", "Erro Nome", "Erro CPF", "Erro Data", "Avisos", "Origem do endereço"]
 st.dataframe(vis[cols_vis].style.apply(
     lambda s: ["background-color:#fde2e2" if v == "Inválido" else "" for v in s], subset=["Status"]),
     hide_index=True)
 
 # ------------------------------------------------------------------ downloads
-st.subheader("3. Downloads")
+st.subheader("4. Downloads")
 escopo = st.radio("Linhas no CSV", ["Todas as linhas", "Somente linhas válidas"], horizontal=True)
 saida_exp = saida if escopo == "Todas as linhas" else saida[rel["Status"] == "Válido"]
 

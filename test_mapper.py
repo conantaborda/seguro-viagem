@@ -114,3 +114,108 @@ def test_csv_saida_no_padrao_do_modelo():
     linhas_csv = texto.split("\r\n")
     assert linhas_csv[0] == ";".join(COLUNAS_MODELO)
     assert linhas_csv[1].count(";") == len(COLUNAS_MODELO) - 1
+
+
+# ----------------------------------------------------------------------------- padrões e CEP
+BASE_CEP = {
+    "01001000": {"cep": "01001000", "rua": "Praça da Sé", "bairro": "Sé", "cidade": "São Paulo",
+                 "uf": "SP", "complemento": "lado ímpar"},
+    "19015000": {"cep": "19015000", "rua": "Rua Exemplo", "bairro": "Centro",
+                 "cidade": "Presidente Prudente", "uf": "SP", "complemento": ""},
+}
+END_SE = {"rua": "Praça da Sé", "bairro": "Sé", "cidade": "São Paulo", "uf": "SP", "complemento": "lado ímpar"}
+
+
+def fake_buscar(chamadas=None):
+    def buscar(cep):
+        if chamadas is not None:
+            chamadas.append(cep)
+        return BASE_CEP.get(cep)
+    return buscar
+
+
+def df_basico(extra: dict | None = None, n=2):
+    """DataFrame com nome/nascimento/CPF válidos e colunas extras opcionais."""
+    cpfs = [fmt(cpf_valido(f"{100000000 + i * 7919:09d}")) for i in range(n)]
+    d = {"Nome": [f"Pessoa Numero{'ab'[i % 2]} Silva" for i in range(n)],
+         "Nascimento": ["05/08/1990"] * n, "CPF": cpfs}
+    d.update(extra or {})
+    df = pd.DataFrame(d, dtype=object)
+    mapa = {"nome": 0, "nascimento": 1, "cpf": 2}
+    for j, nome in enumerate(list(d)[3:], start=3):
+        mapa[nome.lower()] = j
+    return df, list(range(2, 2 + n)), mapa
+
+
+def test_padroes_preenchem_linhas_sem_dado():
+    df, linhas, mapa = df_basico()
+    saida, rel = converter(
+        df, linhas, mapa, cep_padrao="01001-000", endereco_padrao=END_SE, numero_padrao="100",
+        email_padrao="Contato@Ex.com", celular_padrao="(18) 98120-1061")
+    for _, r in saida.iterrows():
+        assert r["cep (00000-000)"] == "01001-000" and r["Rua"] == "Praça da Sé"
+        assert r["Bairro"] == "Sé" and r["Cidade"] == "São Paulo" and r["UF"] == "SP"
+        assert r["Numero"] == "100" and r["Complemento"] == "lado ímpar"
+        assert r["E-mail"] == "contato@ex.com" and r["Celular (00-000000000)"] == "18-981201061"
+    assert set(rel["Origem do endereço"]) == {"CEP padrão"}
+
+
+def test_modo_vazios_preserva_planilha_e_todas_sobrescreve():
+    extra = {"CEP": ["19015-000", None], "Rua": ["Rua Própria", None], "Email": ["a@x.com", None]}
+    df, linhas, mapa = df_basico(extra)
+    comuns = dict(cep_padrao="01001000", endereco_padrao=END_SE, email_padrao="padrao@x.com")
+
+    s, rel = converter(df, linhas, mapa, **comuns)
+    assert (s.loc[0, "cep (00000-000)"], s.loc[0, "Rua"], s.loc[0, "E-mail"]) == ("19015-000", "Rua Própria", "a@x.com")
+    assert (s.loc[1, "cep (00000-000)"], s.loc[1, "Rua"], s.loc[1, "E-mail"]) == ("01001-000", "Praça da Sé", "padrao@x.com")
+    assert list(rel["Origem do endereço"]) == ["planilha", "CEP padrão"]
+
+    s, rel = converter(df, linhas, mapa, cep_modo="todas", email_modo="todas", **comuns)
+    assert set(s["cep (00000-000)"]) == {"01001-000"} and set(s["Rua"]) == {"Praça da Sé"}
+    assert set(s["E-mail"]) == {"padrao@x.com"}
+
+
+def test_completa_endereco_pelo_cep_e_gera_avisos():
+    extra = {"CEP": ["19015-000", "99999-999", "123", "01001-000"],
+             "UF": [None, None, None, "RJ"]}
+    df, linhas, mapa = df_basico(extra, n=4)
+    s, rel = converter(df, linhas, mapa, buscar_cep=fake_buscar())
+    assert s.loc[0, "Rua"] == "Rua Exemplo" and s.loc[0, "Cidade"] == "Presidente Prudente" and s.loc[0, "UF"] == "SP"
+    assert rel.loc[0, "Origem do endereço"] == "completado pelo CEP"
+    assert "não encontrado" in rel.loc[1, "Avisos"]
+    assert "fora do padrão" in rel.loc[2, "Avisos"]
+    assert "UF diverge" in rel.loc[3, "Avisos"]
+    s2, rel2 = converter(df, linhas, mapa, buscar_cep=fake_buscar(), completar_pelo_cep=False)
+    assert s2.loc[0, "Rua"] == "" and rel2.loc[0, "Origem do endereço"] == "planilha"
+
+
+def test_cada_cep_e_consultado_uma_vez():
+    extra = {"CEP": ["19015-000"] * 3}
+    df, linhas, mapa = df_basico(extra, n=3)
+    chamadas = []
+    converter(df, linhas, mapa, buscar_cep=fake_buscar(chamadas))
+    assert chamadas == ["19015000"]
+
+
+def test_api_fora_do_ar_para_apos_3_falhas():
+    ceps = [f"1901500{i}" for i in range(6)]
+    df, linhas, mapa = df_basico({"CEP": ceps}, n=6)
+    chamadas = []
+
+    def quebrada(cep):
+        chamadas.append(cep)
+        raise RuntimeError("API fora do ar")
+
+    _, rel = converter(df, linhas, mapa, buscar_cep=quebrada)
+    assert len(chamadas) == 3
+    assert all("Falha" in a for a in rel["Avisos"][:3])
+    assert all("indisponível" in a for a in rel["Avisos"][3:])
+    assert set(rel["Status"]) == {"Válido"}  # CEP é só aviso, não reprova a linha
+
+
+def test_padrao_invalido_e_ignorado():
+    df, linhas, mapa = df_basico()
+    s, _ = converter(df, linhas, mapa, cep_padrao="123", endereco_padrao=END_SE,
+                     email_padrao="sem-arroba", celular_padrao="123")
+    assert set(s["cep (00000-000)"]) == {""} and set(s["E-mail"]) == {""}
+    assert set(s["Celular (00-000000000)"]) == {""}
