@@ -668,8 +668,7 @@ def mensagem_cliente(pend: pd.DataFrame, total: int) -> str:
                      f"Nascimento: {r['Data de nascimento informada'] or '(em branco)'}")
         texto += [f"    - {d}" for d in r["Problema"].split("; ")]
     texto += ["", "Pedimos a gentileza de corrigir esses dados e nos reenviar"
-              + (f"; os outros {ok} passageiro(s) seguem normalmente." if ok else "."),
-              "", "Atenciosamente."]
+              + (f"; os outros {ok} passageiro(s) seguem normalmente." if ok else ".")]
     return "\n".join(texto)
 
 
