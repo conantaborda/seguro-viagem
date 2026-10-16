@@ -318,3 +318,38 @@ def test_sem_pendencias_quando_tudo_valido():
     _, rel = converter(df, linhas, mapa)
     pend = gerar_pendencias(rel)
     assert pend.empty and mensagem_cliente(pend, 3) == ""
+
+
+# ----------------------------------------------------------------------------- sexo: somente M ou F
+def test_normalizar_sexo_variacoes():
+    from mapper import normalizar_sexo as N
+    for v in ["M", "m", "Masculino", "MASCULINO", "masc.", "Homem", "Male", " masculino ", "Masculino (M)", "Sexo: Masculino"]:
+        assert N(v) == ("M", True), v
+    for v in ["F", "f", "Feminino", "FEMININO", "Fem", "Mulher", "Female", "Feminina", "Sexo: Feminino"]:
+        assert N(v) == ("F", True), v
+    assert N(None) == ("", True) and N("") == ("", True)          # sem dado: vazio, sem aviso
+    for v in ["Outro", "X", "1", "feminino/masculino", "Hm"]:      # não reconhecido: vazio, com aviso
+        assert N(v) == ("", False), v
+
+
+def test_sexo_sai_m_ou_f_no_csv_e_avisa_o_desconhecido():
+    extra = {"Sexo": ["Masculino", "FEMININO", "Outro", None, "mulher"]}
+    df, linhas, mapa = df_basico(extra, n=5)
+    saida, rel = converter(df, linhas, mapa)
+    assert list(saida["Sexo"]) == ["M", "F", "", "", "F"]
+    assert set(saida["Sexo"]) <= {"M", "F", ""}
+    assert "Sexo não reconhecido (Outro)" in rel.loc[2, "Avisos"]
+    assert rel.loc[3, "Avisos"] == ""                              # vazio não gera aviso
+    assert rel.loc[2, "Status"] == "Válido"                        # sexo é só aviso, não reprova a linha
+    linhas_csv = para_csv(saida).decode().split("\r\n")
+    sexo_col = COLUNAS_MODELO.index("Sexo")
+    assert [l.split(";")[sexo_col] for l in linhas_csv[1:6]] == ["M", "F", "", "", "F"]
+
+
+def test_detecta_coluna_de_sexo_por_cabecalho_e_por_conteudo():
+    from mapper import detectar_mapeamento
+    for cabecalho in ("Gênero", "Sexo", "c9"):  # "c9" força a detecção só pelo conteúdo
+        extra = {cabecalho: ["Masculino", "Feminino", "M", "F"]}
+        df, _, _ = df_basico(extra, n=4)
+        det = detectar_mapeamento(df)
+        assert det["sexo"].coluna == 3, cabecalho

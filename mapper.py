@@ -216,7 +216,26 @@ _RE_CPF_FMT = re.compile(r"\d{3}\.\d{3}\.\d{3}[-.]\d{2}")
 _RE_DATA = re.compile(r"\d{1,4}[/\-.]\d{1,2}[/\-.]\d{1,4}(\s+\d{1,2}:\d{2}(:\d{2})?)?")
 _RE_CEP = re.compile(r"\d{5}-?\d{3}")
 _RE_NOME = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ'’\-\. ]+")
-_SEXO = {"m", "f", "masculino", "feminino", "masc", "fem", "homem", "mulher", "male", "female"}
+_SEXO_M = {"m", "masc", "masculino", "masculina", "homem", "h", "male", "man", "varao", "sexo masculino"}
+_SEXO_F = {"f", "fem", "feminino", "feminina", "mulher", "female", "woman", "sexo feminino"}
+_SEXO = _SEXO_M | _SEXO_F
+
+
+def normalizar_sexo(valor) -> tuple[str, bool]:
+    """('M' | 'F' | '', reconhecido). Vazio é reconhecido (sem dado); texto que não é M nem F volta ('', False)."""
+    t = norm(_txt(valor))
+    if not t:
+        return "", True
+    if t in _SEXO_M:
+        return "M", True
+    if t in _SEXO_F:
+        return "F", True
+    # variações com texto extra, ex.: "Masculino (M)", "Sexo: Feminino" — só palavras inteiras
+    palavras = set(t.split()) - {"sexo", "genero"}
+    m, f = bool(palavras & (_SEXO_M - {"m", "h"})), bool(palavras & (_SEXO_F - {"f"}))
+    if m != f:
+        return ("M" if m else "F"), True
+    return "", False
 
 
 def eh_email(v) -> bool:
@@ -264,7 +283,8 @@ def eh_uf(v) -> bool:
 
 
 def eh_sexo(v) -> bool:
-    return norm(_txt(v)) in _SEXO
+    valor, ok = normalizar_sexo(v)
+    return ok and valor != ""
 
 
 def eh_nome(v) -> bool:
@@ -515,6 +535,11 @@ def converter(
             if not ok_cel:
                 avisos.append("Celular fora do padrão DDD + número")
 
+        # --- sexo: a saída é somente M ou F
+        sexo, ok_sexo = normalizar_sexo(bruto("sexo", i))
+        if not ok_sexo:
+            avisos.append(f"Sexo não reconhecido ({_txt(bruto('sexo', i))}): use M ou F")
+
         # --- CEP e endereço
         v_cep = bruto("cep", i)
         tem_cep = _tem_valor(v_cep)
@@ -561,7 +586,7 @@ def converter(
         saida.append(dict(zip(COLUNAS_MODELO, map(limpar_texto_csv, [
             nome, nasc, cpf, email, celular, cep,
             end["rua"], numero, end["bairro"], complemento, end["cidade"], end["uf"],
-            _txt(bruto("sexo", i)),
+            sexo,
             _txt(bruto("file", i)) if mapa.get("file") is not None else file_fixo,
             _txt(bruto("grupo", i)) if mapa.get("grupo") is not None else grupo_fixo,
         ]))))
