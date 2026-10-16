@@ -12,6 +12,8 @@ venv/
 *.xlsx
 *.xls
 *.csv
+*.pdf
+*.zip
 
 # Sistema
 .DS_Store
