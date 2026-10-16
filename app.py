@@ -8,7 +8,7 @@ st.set_page_config(page_title="Painel GTA", page_icon="🧭", layout="wide")
 
 pagina = st.navigation([
     st.Page("paginas/inicio.py", title="Início", icon="🏠", default=True),
-    st.Page("paginas/emissao_seguro.py", title="Planilha de emissão", icon="🧾"),
+    st.Page("paginas/emissao_seguro.py", title="Planilha para emissão GTA", icon="🧾"),
     st.Page("paginas/vouchers.py", title="Vouchers GTA", icon="📄"),
 ])
 pagina.run()
