@@ -12,6 +12,7 @@ modelo `emissao_planilha_modelo`.
    Funciona até sem cabeçalho. Você revisa e ajusta antes de gerar.
 3. **Conversão:** grava no padrão do modelo (separador `;`, quebra de linha CRLF):
    data `DD/MM/AAAA`, celular `00-000000000`, CEP `00000-000`, CPF no formato escolhido.
+   Todo o texto sai **sem acentos e caracteres especiais** (São Paulo → Sao Paulo, Paraná → Parana).
 4. **Validação:** nome (nome e sobrenome, sem números), CPF (dígitos verificadores, repetidos, duplicados)
    e data de nascimento (existente, não futura, idade máxima). E-mail, celular, CEP e UF geram apenas avisos.
 5. **Padrões (opcional):** informe um CEP, número, complemento, e-mail e celular padrão para preencher

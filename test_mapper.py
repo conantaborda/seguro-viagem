@@ -153,9 +153,9 @@ def test_padroes_preenchem_linhas_sem_dado():
         df, linhas, mapa, cep_padrao="01001-000", endereco_padrao=END_SE, numero_padrao="100",
         email_padrao="Contato@Ex.com", celular_padrao="(18) 98120-1061")
     for _, r in saida.iterrows():
-        assert r["cep (00000-000)"] == "01001-000" and r["Rua"] == "Praça da Sé"
-        assert r["Bairro"] == "Sé" and r["Cidade"] == "São Paulo" and r["UF"] == "SP"
-        assert r["Numero"] == "100" and r["Complemento"] == "lado ímpar"
+        assert r["cep (00000-000)"] == "01001-000" and r["Rua"] == "Praca da Se"
+        assert r["Bairro"] == "Se" and r["Cidade"] == "Sao Paulo" and r["UF"] == "SP"
+        assert r["Numero"] == "100" and r["Complemento"] == "lado impar"
         assert r["E-mail"] == "contato@ex.com" and r["Celular (00-000000000)"] == "18-981201061"
     assert set(rel["Origem do endereço"]) == {"CEP padrão"}
 
@@ -166,12 +166,12 @@ def test_modo_vazios_preserva_planilha_e_todas_sobrescreve():
     comuns = dict(cep_padrao="01001000", endereco_padrao=END_SE, email_padrao="padrao@x.com")
 
     s, rel = converter(df, linhas, mapa, **comuns)
-    assert (s.loc[0, "cep (00000-000)"], s.loc[0, "Rua"], s.loc[0, "E-mail"]) == ("19015-000", "Rua Própria", "a@x.com")
-    assert (s.loc[1, "cep (00000-000)"], s.loc[1, "Rua"], s.loc[1, "E-mail"]) == ("01001-000", "Praça da Sé", "padrao@x.com")
+    assert (s.loc[0, "cep (00000-000)"], s.loc[0, "Rua"], s.loc[0, "E-mail"]) == ("19015-000", "Rua Propria", "a@x.com")
+    assert (s.loc[1, "cep (00000-000)"], s.loc[1, "Rua"], s.loc[1, "E-mail"]) == ("01001-000", "Praca da Se", "padrao@x.com")
     assert list(rel["Origem do endereço"]) == ["planilha", "CEP padrão"]
 
     s, rel = converter(df, linhas, mapa, cep_modo="todas", email_modo="todas", **comuns)
-    assert set(s["cep (00000-000)"]) == {"01001-000"} and set(s["Rua"]) == {"Praça da Sé"}
+    assert set(s["cep (00000-000)"]) == {"01001-000"} and set(s["Rua"]) == {"Praca da Se"}
     assert set(s["E-mail"]) == {"padrao@x.com"}
 
 
@@ -219,3 +219,40 @@ def test_padrao_invalido_e_ignorado():
                      email_padrao="sem-arroba", celular_padrao="123")
     assert set(s["cep (00000-000)"]) == {""} and set(s["E-mail"]) == {""}
     assert set(s["Celular (00-000000000)"]) == {""}
+
+
+# ----------------------------------------------------------------------------- saída sem caracteres especiais
+def test_saida_do_csv_so_ascii():
+    extra = {"Cidade": ["São Paulo", "SÃ£o Paulo"], "UF": ["SP", "PR"],
+             "Rua": ["Praça da Sé; 2º andar", "Rua Ação"], "Email": ["a@x.com", "b@x.com"]}
+    df, linhas, mapa = df_basico(extra)
+    df.loc[0, "Nome"] = "José D’Ávila Júnior"
+    saida, rel = converter(df, linhas, mapa)
+    for col in saida.columns:
+        for v in saida[col]:
+            assert v.isascii(), (col, v)
+    assert saida.loc[0, "Pax (nome e sobrenome)"] == "Jose D'Avila Junior"
+    assert list(saida["Cidade"]) == ["Sao Paulo", "Sao Paulo"]
+    assert saida.loc[0, "Rua"] == "Praca da Se, 2o andar"
+    assert saida.loc[1, "Rua"] == "Rua Acao"
+    assert saida.loc[0, "E-mail"] == "a@x.com"
+    assert rel.loc[0, "Status"] == "Válido"  # a validação usa o texto original, com acentos
+    csv_bytes = para_csv(saida)
+    csv_bytes.decode("ascii")  # não pode levantar erro
+
+
+def test_limpeza_nao_estraga_texto_legitimo():
+    from mapper import limpar_texto_csv as L
+    assert L("SÃO PAULO") == "SAO PAULO"
+    assert L("Paraná") == "Parana"
+    assert L("ParanÃ¡") == "Parana"
+    assert L("a\nb;c") == "a b,c"
+    assert L(None) == ""
+
+
+def test_padrao_com_endereco_acentuado_sai_sem_acento():
+    df, linhas, mapa = df_basico()
+    end = {"rua": "Avenida São João", "bairro": "Bela Vista", "cidade": "Maringá", "uf": "PR", "complemento": ""}
+    s, _ = converter(df, linhas, mapa, cep_padrao="87020-000", endereco_padrao=end)
+    assert set(s["Rua"]) == {"Avenida Sao Joao"} and set(s["Cidade"]) == {"Maringa"}
+    assert all(v.isascii() for col in s.columns for v in s[col])

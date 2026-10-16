@@ -157,8 +157,8 @@ with st.expander("Opções de formato e validação", expanded=False):
                                format_func=FORMATOS_CPF.get,
                                help="O cabeçalho do modelo mostra 000.000.000.00 (ponto antes dos 2 últimos "
                                     "dígitos). Se o seu sistema espera hífen, escolha o padrão.")
-    codificacao = o2.selectbox("Codificação do CSV", ["utf-8", "cp1252"],
-                               format_func=lambda x: {"utf-8": "UTF-8", "cp1252": "Windows (ANSI)"}[x])
+    o2.info("O CSV sai só com caracteres simples, sem acentos (ex.: São Paulo → Sao Paulo).")
+    codificacao = "utf-8"  # irrelevante: a saída é 100% ASCII
     p1, p2, p3 = st.columns(3)
     nome_maiusculo = p1.checkbox("Nome em MAIÚSCULAS sem acento", value=False)
     zeros = p2.checkbox("Completar zeros à esquerda no CPF", value=True,

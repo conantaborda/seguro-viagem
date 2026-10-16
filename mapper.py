@@ -69,6 +69,36 @@ def sem_acento_maiusculo(s: str) -> str:
     return "".join(c for c in s if not unicodedata.combining(c)).upper()
 
 
+_SUBST_ASCII = str.maketrans({
+    "’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-", "…": "...", "\u00a0": " ",
+    "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O",
+    "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
+})
+
+
+def corrigir_mojibake(s: str) -> str:
+    """Desfaz texto UTF-8 lido como ANSI ("SÃ£o Paulo" -> "São Paulo"); só age se o resultado for UTF-8 válido."""
+    if "Ã" not in s and "Â" not in s:
+        return s
+    for enc in ("cp1252", "latin-1"):
+        try:
+            return s.encode(enc).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+    return s
+
+
+def limpar_texto_csv(valor) -> str:
+    """Texto seguro para o CSV do modelo: só ASCII, sem acentos, sem ';' nem quebras de linha."""
+    s = "" if valor is None else str(valor)
+    s = corrigir_mojibake(s).translate(_SUBST_ASCII)
+    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = s.replace(";", ",")
+    s = re.sub(r"[\x00-\x1f\x7f]+", " ", s)
+    return " ".join(s.split())
+
+
 def letra_coluna(i: int) -> str:
     s, i = "", i + 1
     while i:
@@ -528,13 +558,13 @@ def converter(
         if end["uf"] and end["uf"] not in UFS:
             avisos.append("UF não reconhecida")
 
-        saida.append(dict(zip(COLUNAS_MODELO, [
+        saida.append(dict(zip(COLUNAS_MODELO, map(limpar_texto_csv, [
             nome, nasc, cpf, email, celular, cep,
             end["rua"], numero, end["bairro"], complemento, end["cidade"], end["uf"],
             _txt(bruto("sexo", i)),
             _txt(bruto("file", i)) if mapa.get("file") is not None else file_fixo,
             _txt(bruto("grupo", i)) if mapa.get("grupo") is not None else grupo_fixo,
-        ])))
+        ]))))
         rel.append({
             "Linha": linhas[i], "Nome": nome, "CPF": cpf, "Data de Nascimento": nasc,
             "Nome OK": ok_n, "CPF OK": ok_c, "Data OK": ok_d,
@@ -560,6 +590,7 @@ def converter(
 
 
 def para_csv(saida: pd.DataFrame, encoding: str = "utf-8") -> bytes:
-    """CSV no padrão do modelo: separador ';' e quebra de linha CRLF."""
-    texto = saida.fillna("").to_csv(sep=";", index=False, lineterminator="\r\n")
+    """CSV no padrão do modelo: separador ';', quebra de linha CRLF e texto só em ASCII (sem acentos)."""
+    limpo = saida.fillna("").astype(str).apply(lambda col: col.map(limpar_texto_csv))
+    texto = limpo.to_csv(sep=";", index=False, lineterminator="\r\n")
     return texto.encode(encoding, errors="replace")
